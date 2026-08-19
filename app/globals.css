@@ -53,6 +53,32 @@ textarea {
   backdrop-filter: blur(10px);
 }
 
+.background-job-panel {
+  margin-top: 20px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: white;
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.08);
+  padding: 20px;
+}
+
+.background-job-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.background-job-header h2 {
+  margin-bottom: 8px;
+  font-size: 24px;
+}
+
+.background-job-header p:last-child {
+  margin-bottom: 0;
+  color: var(--muted);
+}
+
 .hero-card {
   border-radius: 28px;
   padding: 34px;
@@ -711,6 +737,7 @@ code {
 
   .input-row,
   .result-header,
+  .background-job-header,
   .submit-panel-header,
   .submit-actions,
   .data-import-header,

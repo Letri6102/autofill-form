@@ -3,5 +3,7 @@ node_modules
 out
 .env*.local
 .vercel
+.workflow-data/
 .DS_Store
 *.log
+/.swc

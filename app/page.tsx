@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 
 type ParsedQuestion = {
   questionOrder: number;
@@ -40,17 +40,34 @@ type ApiResponse =
       message: string;
     };
 
-type SubmitResponse =
+type StartSubmissionJobResponse =
   | {
       ok: true;
-      status: number;
-      statusText: string;
+      runId: string;
+      total: number;
     }
   | {
       ok: false;
-      message?: string;
-      status?: number;
-      statusText?: string;
+      message: string;
+    };
+
+type SubmissionJobStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
+
+type SubmissionJobStatusResponse =
+  | {
+      ok: true;
+      runId: string;
+      status: SubmissionJobStatus;
+      total: number;
+      completed: number;
+      failed: number;
+      message: string;
+      nextSubmitAt: string | null;
+      logs: SubmissionLog[];
+    }
+  | {
+      ok: false;
+      message: string;
     };
 
 type SubmissionLog = {
@@ -58,7 +75,6 @@ type SubmissionLog = {
   ok: boolean;
   status: number | null;
   message: string;
-  payload: Record<string, string>;
   sourceRow?: number;
 };
 
@@ -85,9 +101,29 @@ const MIN_DELAY_SECONDS = 10;
 const MAX_DELAY_SECONDS = 3600;
 const QUESTIONS_PER_PAGE = 5;
 const WEIGHT_STEP = 10;
+const ACTIVE_RUN_STORAGE_KEY = "google-form-active-workflow-run";
+const JOB_POLL_INTERVAL_MS = 3000;
+const MAX_START_REQUEST_BYTES = 4_000_000;
 const WEIGHT_PERCENTAGES = Array.from({ length: 100 / WEIGHT_STEP + 1 }, (_, index) =>
   index * WEIGHT_STEP,
 );
+
+function getJobStatusLabel(status: SubmissionJobStatus | ""): string {
+  switch (status) {
+    case "pending":
+      return "Đang xếp hàng";
+    case "running":
+      return "Đang chạy trên Vercel";
+    case "completed":
+      return "Đã hoàn tất";
+    case "failed":
+      return "Đã dừng do lỗi";
+    case "cancelled":
+      return "Đã hủy";
+    default:
+      return "Chưa chạy";
+  }
+}
 
 function buildDefaultWeights(options: string[]): Record<string, number> {
   if (options.length === 0) return {};
@@ -176,7 +212,85 @@ export default function HomePage() {
   const [fileStartLine, setFileStartLine] = useState(2);
   const [completedCount, setCompletedCount] = useState(0);
   const [submitTargetCount, setSubmitTargetCount] = useState(0);
-  const cancelSubmissionRef = useRef(false);
+  const [activeRunId, setActiveRunId] = useState("");
+  const [jobStatus, setJobStatus] = useState<SubmissionJobStatus | "">("");
+  const [jobMessage, setJobMessage] = useState("");
+  const [nextSubmitAt, setNextSubmitAt] = useState<string | null>(null);
+
+  useEffect(() => {
+    const savedRunId = window.localStorage.getItem(ACTIVE_RUN_STORAGE_KEY);
+    if (savedRunId) setActiveRunId(savedRunId);
+  }, []);
+
+  useEffect(() => {
+    if (!activeRunId) return;
+
+    let disposed = false;
+
+    async function refreshJobStatus() {
+      try {
+        const response = await fetch(`/api/submission-jobs/${encodeURIComponent(activeRunId)}`, {
+          cache: "no-store",
+        });
+        const result = (await response.json()) as SubmissionJobStatusResponse;
+        if (disposed) return;
+
+        if (!response.ok || !result.ok) {
+          setSubmitError(result.ok ? "Không đọc được tiến độ Workflow." : result.message);
+          return;
+        }
+
+        const isRunning = result.status === "pending" || result.status === "running";
+        setJobStatus(result.status);
+        setJobMessage(result.message);
+        setSubmitTargetCount(result.total);
+        setCompletedCount(result.completed);
+        setSubmitLogs(result.logs);
+        setNextSubmitAt(isRunning ? result.nextSubmitAt : null);
+        setSubmitting(isRunning);
+
+        if (result.status === "failed") {
+          setSubmitError(result.message);
+        } else if (result.status === "cancelled") {
+          setSubmitError("Workflow đã được hủy.");
+        } else {
+          setSubmitError("");
+        }
+
+        if (!isRunning) {
+          window.clearInterval(pollId);
+        }
+      } catch {
+        if (!disposed) {
+          setSubmitError("Tạm thời không đọc được tiến độ Workflow. Hệ thống sẽ thử lại.");
+        }
+      }
+    }
+
+    void refreshJobStatus();
+    const pollId = window.setInterval(() => void refreshJobStatus(), JOB_POLL_INTERVAL_MS);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(pollId);
+    };
+  }, [activeRunId]);
+
+  useEffect(() => {
+    if (!nextSubmitAt) {
+      setDelayRemaining(null);
+      return;
+    }
+
+    function updateRemainingTime() {
+      const remaining = Math.max(0, Math.ceil((new Date(nextSubmitAt!).getTime() - Date.now()) / 1000));
+      setDelayRemaining(remaining > 0 ? remaining : null);
+    }
+
+    updateRemainingTime();
+    const timerId = window.setInterval(updateRemainingTime, 1000);
+    return () => window.clearInterval(timerId);
+  }, [nextSubmitAt]);
 
   const totalQuestions = useMemo(() => {
     if (!data) return 0;
@@ -227,12 +341,14 @@ export default function HomePage() {
     if (!data) {
       setOptionWeights({});
       setPageHistoryValue("0");
-      setSubmitLogs([]);
-      setSubmitError("");
       setColumnMapping({});
       setTextAnswerBanks({});
-      setCompletedCount(0);
-      setSubmitTargetCount(0);
+      if (!window.localStorage.getItem(ACTIVE_RUN_STORAGE_KEY)) {
+        setSubmitLogs([]);
+        setSubmitError("");
+        setCompletedCount(0);
+        setSubmitTargetCount(0);
+      }
       setFileStartLine(2);
       return;
     }
@@ -558,20 +674,38 @@ export default function HomePage() {
     return payload;
   }
 
-  async function waitSeconds(seconds: number): Promise<boolean> {
-    for (let remaining = seconds; remaining > 0; remaining -= 1) {
-      if (cancelSubmissionRef.current) return false;
-      setDelayRemaining(remaining);
-      await new Promise((resolve) => window.setTimeout(resolve, 1000));
-    }
+  async function stopSubmitting() {
+    if (!activeRunId) return;
 
-    setDelayRemaining(null);
-    return !cancelSubmissionRef.current;
+    try {
+      const response = await fetch(`/api/submission-jobs/${encodeURIComponent(activeRunId)}`, {
+        method: "DELETE",
+      });
+      const result = (await response.json()) as { ok: boolean; message?: string };
+      if (!response.ok || !result.ok) {
+        throw new Error(result.message || "Không hủy được Workflow.");
+      }
+
+      setSubmitting(false);
+      setJobStatus("cancelled");
+      setJobMessage("Workflow đã được hủy.");
+      setSubmitError("Workflow đã được hủy.");
+      setNextSubmitAt(null);
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : "Không hủy được Workflow.");
+    }
   }
 
-  function stopSubmitting() {
-    cancelSubmissionRef.current = true;
-    setDelayRemaining(null);
+  function clearSavedJob() {
+    window.localStorage.removeItem(ACTIVE_RUN_STORAGE_KEY);
+    setActiveRunId("");
+    setJobStatus("");
+    setJobMessage("");
+    setNextSubmitAt(null);
+    setSubmitLogs([]);
+    setSubmitError("");
+    setCompletedCount(0);
+    setSubmitTargetCount(0);
   }
 
   async function submitGeneratedPayloads() {
@@ -600,63 +734,55 @@ export default function HomePage() {
     setSubmitTargetCount(count);
     setSubmitting(true);
     setDelayRemaining(null);
-    cancelSubmissionRef.current = false;
+    setNextSubmitAt(null);
+    setJobStatus("pending");
+    setJobMessage("Đang tạo Workflow trên server.");
 
     try {
-      for (let index = 1; index <= count; index += 1) {
-        if (cancelSubmissionRef.current) break;
-
-        const sourceRow = hasImportedMapping ? safeFileStartLine + index - 1 : undefined;
+      const submissions = Array.from({ length: count }, (_, position) => {
+        const index = position + 1;
+        const sourceRow = hasImportedMapping ? safeFileStartLine + position : undefined;
         const payload = buildSubmissionPayload(sourceRow !== undefined ? sourceRow - 2 : undefined);
-        const response = await fetch("/api/submit-form", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            sourceUrl: data.sourceUrl,
-            payload,
-          }),
-        });
-        const result = (await response.json()) as SubmitResponse;
-        const status = result.status ?? response.status ?? null;
-        const ok = response.ok && result.ok;
-        const message = ok ? "Đã gửi" : !result.ok ? result.message || `HTTP ${status}` : `HTTP ${status}`;
 
-        setSubmitLogs((current) =>
-          [
-            {
-              index,
-              ok,
-              status,
-              message,
-              payload,
-              sourceRow,
-            },
-            ...current,
-          ].slice(0, 20),
-        );
-
-        if (!ok) {
-          setSubmitError(message);
-          break;
-        }
-
-        setCompletedCount((current) => current + 1);
-
-        if (index < count) {
-          const shouldContinue = await waitSeconds(randomInt(minDelay, maxDelay));
-          if (!shouldContinue) break;
-        }
+        return {
+          index,
+          sourceRow,
+          payload,
+          delaySeconds: index < count ? randomInt(minDelay, maxDelay) : 0,
+        };
+      });
+      const requestBody = JSON.stringify({
+        sourceUrl: data.sourceUrl,
+        submissions,
+      });
+      if (new Blob([requestBody]).size > MAX_START_REQUEST_BYTES) {
+        throw new Error("Dữ liệu vượt 4 MB. Hãy giảm số form và chia thành nhiều lượt chạy.");
       }
+
+      const response = await fetch("/api/submission-jobs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: requestBody,
+      });
+      const result = (await response.json()) as StartSubmissionJobResponse;
+
+      if (!response.ok || !result.ok) {
+        throw new Error(result.ok ? "Không thể tạo Workflow." : result.message);
+      }
+
+      window.localStorage.setItem(ACTIVE_RUN_STORAGE_KEY, result.runId);
+      setActiveRunId(result.runId);
+      setSubmitTargetCount(result.total);
+      setJobMessage("Workflow đã được tạo và sẽ tiếp tục chạy khi đóng tab.");
     } catch (submitErrorValue) {
       const message =
-        submitErrorValue instanceof Error ? submitErrorValue.message : "Không gọi được API submit form.";
+        submitErrorValue instanceof Error ? submitErrorValue.message : "Không tạo được Workflow submit form.";
       setSubmitError(message);
-    } finally {
       setSubmitting(false);
-      setDelayRemaining(null);
-      cancelSubmissionRef.current = false;
+      setJobStatus("failed");
+      setJobMessage(message);
     }
   }
 
@@ -708,6 +834,45 @@ export default function HomePage() {
       </section>
 
       {error ? <div className="alert-error">{error}</div> : null}
+
+      {activeRunId && !data ? (
+        <section className="background-job-panel" aria-live="polite">
+          <div className="background-job-header">
+            <div>
+              <p className="eyebrow">Tác vụ nền</p>
+              <h2>{getJobStatusLabel(jobStatus)}</h2>
+              <p>{jobMessage || "Đang tải tiến độ Workflow..."}</p>
+            </div>
+            <div className="submit-actions">
+              {submitting ? (
+                <button className="secondary-button" type="button" onClick={stopSubmitting}>
+                  Dừng
+                </button>
+              ) : (
+                <button className="secondary-button" type="button" onClick={clearSavedJob}>
+                  Ẩn tiến độ
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="submit-progress">
+            <div>
+              <span>Hoàn tất</span>
+              <strong>
+                {completedCount} / {submitTargetCount} form
+              </strong>
+            </div>
+            <div>
+              <span>Trạng thái</span>
+              <strong>{getJobStatusLabel(jobStatus)}</strong>
+            </div>
+          </div>
+          {delayRemaining !== null ? (
+            <p className="submit-status">Lượt tiếp theo sau khoảng {delayRemaining} giây.</p>
+          ) : null}
+          {submitError ? <p className="submit-warning">{submitError}</p> : null}
+        </section>
+      ) : null}
 
       {data ? (
         <section className="result-card">
@@ -827,8 +992,13 @@ export default function HomePage() {
 
             {submitConfigError ? <p className="submit-warning">{submitConfigError}</p> : null}
             {submitError ? <p className="submit-warning">{submitError}</p> : null}
+            {activeRunId ? (
+              <p className="submit-status">
+                {getJobStatusLabel(jobStatus)} · <code>{activeRunId}</code>
+              </p>
+            ) : null}
             {delayRemaining !== null ? (
-              <p className="submit-status">Đợi {delayRemaining} giây trước lượt tiếp theo.</p>
+              <p className="submit-status">Lượt tiếp theo sau khoảng {delayRemaining} giây.</p>
             ) : null}
 
             <div className="submit-progress" aria-live="polite">
@@ -838,6 +1008,12 @@ export default function HomePage() {
                   {completedCount} / {progressTotal} form
                 </strong>
               </div>
+              {jobStatus === "failed" ? (
+                <div>
+                  <span>Lỗi</span>
+                  <strong>{Math.max(0, progressTotal - completedCount)} form chưa gửi</strong>
+                </div>
+              ) : null}
               {fileRunEndLine ? (
                 <div>
                   <span>Dòng file</span>
