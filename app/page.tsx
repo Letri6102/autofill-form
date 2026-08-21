@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type ParsedQuestion = {
   questionOrder: number;
@@ -125,18 +125,24 @@ function getJobStatusLabel(status: SubmissionJobStatus | ""): string {
   }
 }
 
-function buildDefaultWeights(options: string[]): Record<string, number> {
-  if (options.length === 0) return {};
+function buildDefaultWeightValues(optionCount: number): number[] {
+  if (optionCount === 0) return [];
 
   const totalUnits = 100 / WEIGHT_STEP;
-  const baseUnits = Math.floor(totalUnits / options.length);
-  const remainderUnits = totalUnits - baseUnits * options.length;
+  const baseUnits = Math.floor(totalUnits / optionCount);
+  const remainderUnits = totalUnits - baseUnits * optionCount;
+
+  return Array.from(
+    { length: optionCount },
+    (_, index) => (baseUnits + (index < remainderUnits ? 1 : 0)) * WEIGHT_STEP,
+  );
+}
+
+function buildDefaultWeights(options: string[]): Record<string, number> {
+  const values = buildDefaultWeightValues(options.length);
 
   return Object.fromEntries(
-    options.map((option, index) => [
-      option,
-      (baseUnits + (index < remainderUnits ? 1 : 0)) * WEIGHT_STEP,
-    ]),
+    options.map((option, index) => [option, values[index]]),
   );
 }
 
@@ -195,6 +201,8 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [keyword, setKeyword] = useState("");
   const [optionWeights, setOptionWeights] = useState<Record<string, Record<string, number>>>({});
+  const [bulkWeightProfiles, setBulkWeightProfiles] = useState<Record<number, number[]>>({});
+  const [bulkWeightMessage, setBulkWeightMessage] = useState("");
   const [pageHistoryValue, setPageHistoryValue] = useState("0");
   const [formCount, setFormCount] = useState(10);
   const [delayMinSeconds, setDelayMinSeconds] = useState(90);
@@ -216,6 +224,7 @@ export default function HomePage() {
   const [jobStatus, setJobStatus] = useState<SubmissionJobStatus | "">("");
   const [jobMessage, setJobMessage] = useState("");
   const [nextSubmitAt, setNextSubmitAt] = useState<string | null>(null);
+  const questionListRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const savedRunId = window.localStorage.getItem(ACTIVE_RUN_STORAGE_KEY);
@@ -306,6 +315,28 @@ export default function HomePage() {
     return allQuestions.filter((question) => question.options.length > 0);
   }, [allQuestions]);
 
+  const weightProfileGroups = useMemo(() => {
+    const questionCountByOptionCount = new Map<number, number>();
+
+    for (const question of optionQuestions) {
+      const optionCount = question.options.length;
+      questionCountByOptionCount.set(
+        optionCount,
+        (questionCountByOptionCount.get(optionCount) ?? 0) + 1,
+      );
+    }
+
+    return Array.from(questionCountByOptionCount, ([optionCount, questionCount]) => ({
+      optionCount,
+      questionCount,
+    })).sort((left, right) => left.optionCount - right.optionCount);
+  }, [optionQuestions]);
+
+  const bulkWeightsValid = weightProfileGroups.every(({ optionCount }) => {
+    const profile = bulkWeightProfiles[optionCount] ?? buildDefaultWeightValues(optionCount);
+    return profile.reduce((sum, weight) => sum + weight, 0) === 100;
+  });
+
   const textAnswerEntries = useMemo(() => {
     return new Set(
       Object.entries(textAnswerBanks)
@@ -340,6 +371,8 @@ export default function HomePage() {
   useEffect(() => {
     if (!data) {
       setOptionWeights({});
+      setBulkWeightProfiles({});
+      setBulkWeightMessage("");
       setPageHistoryValue("0");
       setColumnMapping({});
       setTextAnswerBanks({});
@@ -354,15 +387,21 @@ export default function HomePage() {
     }
 
     const nextWeights: Record<string, Record<string, number>> = {};
+    const nextBulkWeightProfiles: Record<number, number[]> = {};
     for (const section of data.sections) {
       for (const question of section.questions) {
         if (question.options.length > 0) {
           nextWeights[question.entry] = buildDefaultWeights(question.options);
+          nextBulkWeightProfiles[question.options.length] ??= buildDefaultWeightValues(
+            question.options.length,
+          );
         }
       }
     }
 
     setOptionWeights(nextWeights);
+    setBulkWeightProfiles(nextBulkWeightProfiles);
+    setBulkWeightMessage("");
     setPageHistoryValue(data.pageHistory || "0");
     setSubmitLogs([]);
     setSubmitError("");
@@ -618,6 +657,56 @@ export default function HomePage() {
         [option]: safeWeight,
       },
     }));
+  }
+
+  function updateBulkWeight(optionCount: number, optionIndex: number, nextWeight: number) {
+    const safeWeight = clampNumber(Math.round(nextWeight), 0, 100);
+
+    setBulkWeightProfiles((current) => {
+      const profile = current[optionCount] ?? buildDefaultWeightValues(optionCount);
+      return {
+        ...current,
+        [optionCount]: profile.map((weight, index) =>
+          index === optionIndex ? safeWeight : weight,
+        ),
+      };
+    });
+    setBulkWeightMessage("");
+  }
+
+  function resetBulkWeightProfile(optionCount: number) {
+    setBulkWeightProfiles((current) => ({
+      ...current,
+      [optionCount]: buildDefaultWeightValues(optionCount),
+    }));
+    setBulkWeightMessage("");
+  }
+
+  function applyBulkWeights() {
+    if (!bulkWeightsValid) return;
+
+    setOptionWeights((current) => {
+      const nextWeights = { ...current };
+
+      for (const question of optionQuestions) {
+        const profile =
+          bulkWeightProfiles[question.options.length] ??
+          buildDefaultWeightValues(question.options.length);
+        nextWeights[question.entry] = Object.fromEntries(
+          question.options.map((option, index) => [option, profile[index] ?? 0]),
+        );
+      }
+
+      return nextWeights;
+    });
+    setBulkWeightMessage(`Đã áp dụng tỷ lệ cho ${optionQuestions.length} câu hỏi.`);
+  }
+
+  function changeQuestionPage(nextPage: number) {
+    setCurrentPage(clampNumber(nextPage, 1, pageCount));
+    window.requestAnimationFrame(() => {
+      questionListRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   function chooseWeightedOption(question: ParsedQuestion): string | null {
@@ -1096,6 +1185,130 @@ export default function HomePage() {
             ) : null}
           </div>
 
+          {optionQuestions.length > 0 ? (
+            <section className="bulk-weight-panel">
+              <div className="bulk-weight-header">
+                <div>
+                  <p className="eyebrow">Tỷ lệ chung</p>
+                  <h3>Áp dụng cho toàn bộ câu hỏi</h3>
+                </div>
+                <button
+                  type="button"
+                  disabled={!bulkWeightsValid}
+                  onClick={applyBulkWeights}
+                >
+                  Áp dụng tất cả
+                </button>
+              </div>
+
+              <div className="bulk-weight-table-wrap">
+                <table className="bulk-weight-table">
+                  <thead>
+                    <tr>
+                      <th>Nhóm câu hỏi</th>
+                      <th>Tỷ lệ theo thứ tự đáp án</th>
+                      <th>Tổng</th>
+                      <th>Đặt lại</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {weightProfileGroups.map(({ optionCount, questionCount }) => {
+                      const profile =
+                        bulkWeightProfiles[optionCount] ?? buildDefaultWeightValues(optionCount);
+                      const total = profile.reduce((sum, weight) => sum + weight, 0);
+
+                      return (
+                        <tr key={optionCount}>
+                          <th scope="row">
+                            <strong>{optionCount} đáp án</strong>
+                            <span>{questionCount} câu hỏi</span>
+                          </th>
+                          <td>
+                            <div className="bulk-weight-values">
+                              {profile.map((weight, optionIndex) => {
+                                const quickWeight = WEIGHT_PERCENTAGES.includes(weight) ? weight : "";
+
+                                return (
+                                  <label key={optionIndex}>
+                                    <span>Đáp án {optionIndex + 1}</span>
+                                    <div className="bulk-weight-control">
+                                      <div>
+                                        <input
+                                          aria-label={`Nhập tỷ lệ đáp án ${optionIndex + 1} cho nhóm ${optionCount} đáp án`}
+                                          type="number"
+                                          min={0}
+                                          max={100}
+                                          step={5}
+                                          value={weight}
+                                          onChange={(event) =>
+                                            updateBulkWeight(
+                                              optionCount,
+                                              optionIndex,
+                                              event.target.valueAsNumber,
+                                            )
+                                          }
+                                        />
+                                        <strong>%</strong>
+                                      </div>
+                                      <select
+                                        aria-label={`Chọn nhanh tỷ lệ đáp án ${optionIndex + 1} cho nhóm ${optionCount} đáp án`}
+                                        value={quickWeight}
+                                        onChange={(event) =>
+                                          updateBulkWeight(
+                                            optionCount,
+                                            optionIndex,
+                                            Number(event.target.value),
+                                          )
+                                        }
+                                      >
+                                        <option value="" disabled>
+                                          Chọn nhanh
+                                        </option>
+                                        {WEIGHT_PERCENTAGES.map((percentage) => (
+                                          <option value={percentage} key={percentage}>
+                                            {percentage}%
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </td>
+                          <td>
+                            <span
+                              className={`bulk-weight-total ${
+                                total === 100 ? "is-valid" : "is-invalid"
+                              }`}
+                            >
+                              {total}%
+                            </span>
+                          </td>
+                          <td>
+                            <button
+                              className="bulk-reset-button"
+                              type="button"
+                              onClick={() => resetBulkWeightProfile(optionCount)}
+                            >
+                              Chia đều
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {bulkWeightMessage ? (
+                <p className="bulk-weight-message" aria-live="polite">
+                  {bulkWeightMessage}
+                </p>
+              ) : null}
+            </section>
+          ) : null}
+
           <div className="toolbar">
             <input
               value={keyword}
@@ -1104,34 +1317,7 @@ export default function HomePage() {
             />
           </div>
 
-          <div className="pagination-bar">
-            <p>
-              Hiển thị {pageStart}-{pageEnd} / {filteredQuestions.length} câu hỏi
-            </p>
-            <div className="pagination-actions">
-              <button
-                className="secondary-button"
-                type="button"
-                disabled={safeCurrentPage <= 1}
-                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
-              >
-                Trước
-              </button>
-              <span>
-                Trang {safeCurrentPage} / {pageCount}
-              </span>
-              <button
-                className="secondary-button"
-                type="button"
-                disabled={safeCurrentPage >= pageCount}
-                onClick={() => setCurrentPage((page) => Math.min(pageCount, page + 1))}
-              >
-                Sau
-              </button>
-            </div>
-          </div>
-
-          <div className="section-list">
+          <div className="section-list" ref={questionListRef}>
             {paginatedSections.map((section) => (
               <article className="section-card" key={`${section.sectionIndex}-${section.sectionTitle}`}>
                 <div className="section-title-row">
@@ -1243,6 +1429,33 @@ export default function HomePage() {
                 </div>
               </article>
             ))}
+          </div>
+
+          <div className="pagination-bar">
+            <p>
+              Hiển thị {pageStart}-{pageEnd} / {filteredQuestions.length} câu hỏi
+            </p>
+            <div className="pagination-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={safeCurrentPage <= 1}
+                onClick={() => changeQuestionPage(safeCurrentPage - 1)}
+              >
+                Trước
+              </button>
+              <span>
+                Trang {safeCurrentPage} / {pageCount}
+              </span>
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={safeCurrentPage >= pageCount}
+                onClick={() => changeQuestionPage(safeCurrentPage + 1)}
+              >
+                Sau
+              </button>
+            </div>
           </div>
         </section>
       ) : null}
