@@ -203,6 +203,7 @@ export default function HomePage() {
   const [optionWeights, setOptionWeights] = useState<Record<string, Record<string, number>>>({});
   const [bulkWeightProfiles, setBulkWeightProfiles] = useState<Record<number, number[]>>({});
   const [bulkWeightMessage, setBulkWeightMessage] = useState("");
+  const [customWeightEntries, setCustomWeightEntries] = useState<Record<string, true>>({});
   const [pageHistoryValue, setPageHistoryValue] = useState("0");
   const [formCount, setFormCount] = useState(10);
   const [delayMinSeconds, setDelayMinSeconds] = useState(90);
@@ -336,6 +337,9 @@ export default function HomePage() {
     const profile = bulkWeightProfiles[optionCount] ?? buildDefaultWeightValues(optionCount);
     return profile.reduce((sum, weight) => sum + weight, 0) === 100;
   });
+  const customWeightCount = optionQuestions.filter(
+    (question) => customWeightEntries[question.entry],
+  ).length;
 
   const textAnswerEntries = useMemo(() => {
     return new Set(
@@ -373,6 +377,7 @@ export default function HomePage() {
       setOptionWeights({});
       setBulkWeightProfiles({});
       setBulkWeightMessage("");
+      setCustomWeightEntries({});
       setPageHistoryValue("0");
       setColumnMapping({});
       setTextAnswerBanks({});
@@ -402,6 +407,7 @@ export default function HomePage() {
     setOptionWeights(nextWeights);
     setBulkWeightProfiles(nextBulkWeightProfiles);
     setBulkWeightMessage("");
+    setCustomWeightEntries({});
     setPageHistoryValue(data.pageHistory || "0");
     setSubmitLogs([]);
     setSubmitError("");
@@ -657,6 +663,11 @@ export default function HomePage() {
         [option]: safeWeight,
       },
     }));
+    setCustomWeightEntries((current) => ({
+      ...current,
+      [question.entry]: true,
+    }));
+    setBulkWeightMessage("");
   }
 
   function updateBulkWeight(optionCount: number, optionIndex: number, nextWeight: number) {
@@ -682,24 +693,55 @@ export default function HomePage() {
     setBulkWeightMessage("");
   }
 
-  function applyBulkWeights() {
+  function getBulkWeightsForQuestion(question: ParsedQuestion): Record<string, number> {
+    const profile =
+      bulkWeightProfiles[question.options.length] ??
+      buildDefaultWeightValues(question.options.length);
+
+    return Object.fromEntries(
+      question.options.map((option, index) => [option, profile[index] ?? 0]),
+    );
+  }
+
+  function applyBulkWeights(overwriteCustom: boolean) {
     if (!bulkWeightsValid) return;
 
-    setOptionWeights((current) => {
-      const nextWeights = { ...current };
+    const targetQuestions = overwriteCustom
+      ? optionQuestions
+      : optionQuestions.filter((question) => !customWeightEntries[question.entry]);
+    const bulkWeightsByEntry = Object.fromEntries(
+      targetQuestions.map((question) => [question.entry, getBulkWeightsForQuestion(question)]),
+    );
 
-      for (const question of optionQuestions) {
-        const profile =
-          bulkWeightProfiles[question.options.length] ??
-          buildDefaultWeightValues(question.options.length);
-        nextWeights[question.entry] = Object.fromEntries(
-          question.options.map((option, index) => [option, profile[index] ?? 0]),
-        );
-      }
+    setOptionWeights((current) => ({
+      ...current,
+      ...bulkWeightsByEntry,
+    }));
 
-      return nextWeights;
+    if (overwriteCustom) {
+      setCustomWeightEntries({});
+      setBulkWeightMessage(`Đã ghi đè tỷ lệ chung cho ${optionQuestions.length} câu hỏi.`);
+      return;
+    }
+
+    setBulkWeightMessage(
+      customWeightCount > 0
+        ? `Đã áp dụng cho ${targetQuestions.length} câu hỏi và giữ ${customWeightCount} câu tùy chỉnh.`
+        : `Đã áp dụng tỷ lệ cho ${targetQuestions.length} câu hỏi.`,
+    );
+  }
+
+  function resetQuestionToBulkWeights(question: ParsedQuestion) {
+    setOptionWeights((current) => ({
+      ...current,
+      [question.entry]: getBulkWeightsForQuestion(question),
+    }));
+    setCustomWeightEntries((current) => {
+      const nextEntries = { ...current };
+      delete nextEntries[question.entry];
+      return nextEntries;
     });
-    setBulkWeightMessage(`Đã áp dụng tỷ lệ cho ${optionQuestions.length} câu hỏi.`);
+    setBulkWeightMessage("");
   }
 
   function changeQuestionPage(nextPage: number) {
@@ -1192,13 +1234,28 @@ export default function HomePage() {
                   <p className="eyebrow">Tỷ lệ chung</p>
                   <h3>Áp dụng cho toàn bộ câu hỏi</h3>
                 </div>
-                <button
-                  type="button"
-                  disabled={!bulkWeightsValid}
-                  onClick={applyBulkWeights}
-                >
-                  Áp dụng tất cả
-                </button>
+                <div className="bulk-weight-actions">
+                  {customWeightCount > 0 ? (
+                    <span>{customWeightCount} câu tùy chỉnh</span>
+                  ) : null}
+                  <button
+                    type="button"
+                    disabled={!bulkWeightsValid}
+                    onClick={() => applyBulkWeights(false)}
+                  >
+                    {customWeightCount > 0 ? "Áp dụng, giữ tùy chỉnh" : "Áp dụng tất cả"}
+                  </button>
+                  {customWeightCount > 0 ? (
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      disabled={!bulkWeightsValid}
+                      onClick={() => applyBulkWeights(true)}
+                    >
+                      Ghi đè tất cả
+                    </button>
+                  ) : null}
+                </div>
               </div>
 
               <div className="bulk-weight-table-wrap">
@@ -1367,8 +1424,29 @@ export default function HomePage() {
                       {question.options.length > 0 ? (
                         <div className="options-box">
                           <div className="options-header">
-                            <p>Options</p>
-                            <span>Tổng {getQuestionWeightTotal(question)}%</span>
+                            <div className="options-header-label">
+                              <p>Options</p>
+                              <span
+                                className={`weight-mode-badge ${
+                                  customWeightEntries[question.entry] ? "is-custom" : "is-global"
+                                }`}
+                              >
+                                {customWeightEntries[question.entry]
+                                  ? "Tỷ lệ tùy chỉnh"
+                                  : "Theo tỷ lệ chung"}
+                              </span>
+                            </div>
+                            <div className="options-header-actions">
+                              <span>Tổng {getQuestionWeightTotal(question)}%</span>
+                              {customWeightEntries[question.entry] ? (
+                                <button
+                                  type="button"
+                                  onClick={() => resetQuestionToBulkWeights(question)}
+                                >
+                                  Dùng tỷ lệ chung
+                                </button>
+                              ) : null}
+                            </div>
                           </div>
                           <div className="option-weight-list">
                             {question.options.map((option) => {
