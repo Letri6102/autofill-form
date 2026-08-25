@@ -2,6 +2,7 @@ export type ParsedQuestion = {
   questionOrder: number;
   sectionIndex: number;
   sectionTitle: string;
+  groupTitle: string;
   questionText: string;
   questionDescription: string;
   entry: string;
@@ -88,6 +89,16 @@ function extractOptionLabels(optionsRaw: unknown): string[] {
 
   walk(optionsRaw);
   return unique(labels);
+}
+
+function extractGridRowLabel(detail: unknown[]): string {
+  const rowMetadata = detail[3];
+  if (Array.isArray(rowMetadata)) {
+    const label = rowMetadata.find((value) => typeof value === "string");
+    return cleanText(label);
+  }
+
+  return cleanText(rowMetadata);
 }
 
 function extractFormData(html: string): unknown[] {
@@ -274,6 +285,8 @@ export function parseGoogleFormHtml(html: string, sourceUrl: string): ParsedGoog
       const required = Boolean(detail[2]);
       const type = itemType !== null ? TYPE_MAP[itemType] ?? `Unknown Type ${itemType}` : "Unknown";
       const options = extractOptionLabels(optionsRaw);
+      const isGridQuestion = itemType === 7 || itemType === 11;
+      const gridRowLabel = isGridQuestion ? extractGridRowLabel(detail) : "";
 
       questionOrder += 1;
 
@@ -281,7 +294,8 @@ export function parseGoogleFormHtml(html: string, sourceUrl: string): ParsedGoog
         questionOrder,
         sectionIndex: currentSection.sectionIndex,
         sectionTitle: currentSection.sectionTitle,
-        questionText: itemTitle,
+        groupTitle: isGridQuestion ? itemTitle : "",
+        questionText: gridRowLabel || itemTitle,
         questionDescription: itemDescription,
         entry: entryId.startsWith("entry.") ? entryId : `entry.${entryId}`,
         typeId: itemType,

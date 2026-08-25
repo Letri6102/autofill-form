@@ -6,6 +6,7 @@ type ParsedQuestion = {
   questionOrder: number;
   sectionIndex: number;
   sectionTitle: string;
+  groupTitle: string;
   questionText: string;
   questionDescription: string;
   entry: string;
@@ -29,6 +30,23 @@ type ParsedGoogleForm = {
   sourceUrl: string;
   sections: ParsedSection[];
 };
+
+type QuestionDisplayGroup =
+  | {
+      kind: "matrix";
+      key: string;
+      title: string;
+      description: string;
+      type: string;
+      required: boolean;
+      options: string[];
+      questions: ParsedQuestion[];
+    }
+  | {
+      kind: "single";
+      key: string;
+      question: ParsedQuestion;
+    };
 
 type ApiResponse =
   | {
@@ -192,6 +210,55 @@ function buildAutoColumnMapping(questions: ParsedQuestion[], headers: string[]):
   }
 
   return mapping;
+}
+
+function haveSameOptions(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((option, index) => option === right[index]);
+}
+
+function buildQuestionDisplayGroups(questions: ParsedQuestion[]): QuestionDisplayGroup[] {
+  const groups: QuestionDisplayGroup[] = [];
+
+  for (const question of questions) {
+    const isGridQuestion =
+      (question.typeId === 7 || question.typeId === 11) &&
+      Boolean(question.groupTitle) &&
+      question.options.length > 0;
+
+    if (!isGridQuestion) {
+      groups.push({
+        kind: "single",
+        key: `${question.questionOrder}-${question.entry}`,
+        question,
+      });
+      continue;
+    }
+
+    const previousGroup = groups.at(-1);
+    if (
+      previousGroup?.kind === "matrix" &&
+      previousGroup.title === question.groupTitle &&
+      previousGroup.type === question.type &&
+      haveSameOptions(previousGroup.options, question.options)
+    ) {
+      previousGroup.questions.push(question);
+      previousGroup.required = previousGroup.required || question.required;
+      continue;
+    }
+
+    groups.push({
+      kind: "matrix",
+      key: `matrix-${question.questionOrder}-${question.entry}`,
+      title: question.groupTitle,
+      description: question.questionDescription,
+      type: question.type,
+      required: question.required,
+      options: question.options,
+      questions: [question],
+    });
+  }
+
+  return groups;
 }
 
 export default function HomePage() {
@@ -437,6 +504,7 @@ export default function HomePage() {
         questions: section.questions.filter((question) => {
           const haystack = [
             section.sectionTitle,
+            question.groupTitle,
             question.questionText,
             question.questionDescription,
             question.entry,
@@ -1386,23 +1454,209 @@ export default function HomePage() {
                 ) : null}
 
                 <div className="question-list">
-                  {section.questions.map((question) => (
-                    <div className="question-card" key={`${question.questionOrder}-${question.entry}`}>
-                      <div className="question-topline">
-                        <span className="question-number">#{question.questionOrder}</span>
-                        <span className="type-badge">{question.type}</span>
-                        {question.required ? <span className="required-badge">Bắt buộc</span> : null}
+                  {buildQuestionDisplayGroups(section.questions).map((displayGroup) => {
+                    if (displayGroup.kind === "matrix") {
+                      const firstQuestionNumber = displayGroup.questions[0]?.questionOrder;
+                      const lastQuestionNumber = displayGroup.questions.at(-1)?.questionOrder;
+
+                      return (
+                        <div className="question-matrix" key={displayGroup.key}>
+                          <div className="matrix-header">
+                            <div className="matrix-header-copy">
+                              <div className="question-topline">
+                                <span className="question-number">
+                                  #{firstQuestionNumber}
+                                  {lastQuestionNumber !== firstQuestionNumber
+                                    ? `-${lastQuestionNumber}`
+                                    : ""}
+                                </span>
+                                <span className="type-badge">{displayGroup.type}</span>
+                                {displayGroup.required ? (
+                                  <span className="required-badge">Bắt buộc</span>
+                                ) : null}
+                              </div>
+                              <h4>{displayGroup.title || "Nhóm câu hỏi"}</h4>
+                              {displayGroup.description ? (
+                                <p className="question-description">{displayGroup.description}</p>
+                              ) : null}
+                            </div>
+                            <span className="matrix-row-count">
+                              {displayGroup.questions.length} câu
+                            </span>
+                          </div>
+
+                          <div className="matrix-scroll">
+                            <table
+                              className="matrix-table"
+                              style={{
+                                minWidth: `${Math.max(
+                                  760,
+                                  260 + displayGroup.options.length * 145 + 100,
+                                )}px`,
+                              }}
+                            >
+                              <thead>
+                                <tr>
+                                  <th className="matrix-question-column">Danh mục</th>
+                                  {displayGroup.options.map((option) => (
+                                    <th className="matrix-option-column" key={option}>
+                                      {option}
+                                    </th>
+                                  ))}
+                                  <th className="matrix-total-column">Tổng</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {displayGroup.questions.map((question) => {
+                                  const total = getQuestionWeightTotal(question);
+                                  const isCustom = Boolean(customWeightEntries[question.entry]);
+
+                                  return (
+                                    <tr className={isCustom ? "is-custom" : ""} key={question.entry}>
+                                      <td className="matrix-question-cell">
+                                        <div className="matrix-question-title">
+                                          <span>#{question.questionOrder}</span>
+                                          <strong>
+                                            {question.questionText || "Không có tiêu đề câu hỏi"}
+                                          </strong>
+                                        </div>
+                                        <div className="matrix-question-details">
+                                          <code>{question.entry}</code>
+                                          <span
+                                            className={`weight-mode-badge ${
+                                              isCustom ? "is-custom" : "is-global"
+                                            }`}
+                                          >
+                                            {isCustom ? "Tùy chỉnh" : "Tỷ lệ chung"}
+                                          </span>
+                                        </div>
+
+                                        {importedData ? (
+                                          <label className="matrix-column-mapping">
+                                            <span>Cột dữ liệu</span>
+                                            <select
+                                              value={columnMapping[question.entry] ?? ""}
+                                              onChange={(event) =>
+                                                updateColumnMapping(question, event.target.value)
+                                              }
+                                            >
+                                              <option value="">Không dùng file</option>
+                                              {importedData.headers.map((header) => (
+                                                <option value={header} key={header}>
+                                                  {header}
+                                                </option>
+                                              ))}
+                                            </select>
+                                          </label>
+                                        ) : null}
+
+                                        {isCustom ? (
+                                          <button
+                                            className="matrix-reset-button"
+                                            type="button"
+                                            onClick={() => resetQuestionToBulkWeights(question)}
+                                          >
+                                            Dùng tỷ lệ chung
+                                          </button>
+                                        ) : null}
+                                      </td>
+
+                                      {displayGroup.options.map((option) => {
+                                        const weight = optionWeights[question.entry]?.[option] ?? 0;
+                                        const quickWeight = WEIGHT_PERCENTAGES.includes(weight)
+                                          ? weight
+                                          : "";
+
+                                        return (
+                                          <td key={option}>
+                                            <div className="matrix-weight-cell">
+                                              <label className="matrix-manual-weight">
+                                                <input
+                                                  aria-label={`Nhập tỷ lệ cho ${question.questionText}: ${option}`}
+                                                  type="number"
+                                                  min={0}
+                                                  max={100}
+                                                  step={5}
+                                                  value={weight}
+                                                  onChange={(event) =>
+                                                    updateOptionWeight(
+                                                      question,
+                                                      option,
+                                                      event.target.valueAsNumber,
+                                                    )
+                                                  }
+                                                />
+                                                <span>%</span>
+                                              </label>
+                                              <select
+                                                aria-label={`Chọn nhanh tỷ lệ cho ${question.questionText}: ${option}`}
+                                                value={quickWeight}
+                                                onChange={(event) =>
+                                                  updateOptionWeight(
+                                                    question,
+                                                    option,
+                                                    Number(event.target.value),
+                                                  )
+                                                }
+                                              >
+                                                <option value="" disabled>
+                                                  Chọn nhanh
+                                                </option>
+                                                {WEIGHT_PERCENTAGES.map((percentage) => (
+                                                  <option value={percentage} key={percentage}>
+                                                    {percentage}%
+                                                  </option>
+                                                ))}
+                                              </select>
+                                            </div>
+                                          </td>
+                                        );
+                                      })}
+
+                                      <td>
+                                        <div
+                                          className={`matrix-total ${
+                                            total === 100 ? "is-valid" : "is-invalid"
+                                          }`}
+                                        >
+                                          <strong>{total}%</strong>
+                                          <span>
+                                            {total <= 100
+                                              ? `Còn ${100 - total}%`
+                                              : `Vượt ${total - 100}%`}
+                                          </span>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    const question = displayGroup.question;
+
+                    return (
+                      <div className="question-card" key={displayGroup.key}>
+                      <div className="question-meta-row">
+                        <div className="question-topline">
+                          <span className="question-number">#{question.questionOrder}</span>
+                          <span className="type-badge">{question.type}</span>
+                          {question.required ? <span className="required-badge">Bắt buộc</span> : null}
+                        </div>
+                        <div className="entry-line">
+                          <span>Entry:</span>
+                          <code>{question.entry}</code>
+                        </div>
                       </div>
 
                       <h4>{question.questionText || "Không có tiêu đề câu hỏi"}</h4>
                       {question.questionDescription ? (
                         <p className="question-description">{question.questionDescription}</p>
                       ) : null}
-
-                      <div className="entry-line">
-                        <span>Entry:</span>
-                        <code>{question.entry}</code>
-                      </div>
 
                       {importedData ? (
                         <label className="column-mapping-row">
@@ -1502,8 +1756,9 @@ export default function HomePage() {
                           />
                         </div>
                       )}
-                    </div>
-                  ))}
+                      </div>
+                    );
+                  })}
                 </div>
               </article>
             ))}
