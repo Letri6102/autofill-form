@@ -130,6 +130,7 @@ const FIVE_OPTION_PRESETS: Array<{ key: FiveOptionPresetKey; label: string }> = 
 const ACTIVE_RUN_STORAGE_KEY = "google-form-active-workflow-run";
 const JOB_POLL_INTERVAL_MS = 3000;
 const MAX_START_REQUEST_BYTES = 4_000_000;
+const WEIGHT_PERCENTAGE_LIST_ID = "weight-percentage-options";
 const WEIGHT_PERCENTAGES = Array.from({ length: 100 / WEIGHT_STEP + 1 }, (_, index) =>
   index * WEIGHT_STEP,
 );
@@ -1145,6 +1146,11 @@ export default function HomePage() {
 
   return (
     <main className="page-shell">
+      <datalist id={WEIGHT_PERCENTAGE_LIST_ID}>
+        {WEIGHT_PERCENTAGES.map((percentage) => (
+          <option value={percentage} label={`${percentage}%`} key={percentage} />
+        ))}
+      </datalist>
       <section className="hero-card">
         <div>
           <p className="eyebrow">Google Form Parser</p>
@@ -1507,8 +1513,6 @@ export default function HomePage() {
                           <td>
                             <div className="bulk-weight-values">
                               {profile.map((weight, optionIndex) => {
-                                const quickWeight = WEIGHT_PERCENTAGES.includes(weight) ? weight : "";
-
                                 return (
                                   <label key={optionIndex}>
                                     <span>Đáp án {optionIndex + 1}</span>
@@ -1516,57 +1520,30 @@ export default function HomePage() {
                                       <div>
                                         <input
                                           aria-label={`Nhập tỷ lệ đáp án ${optionIndex + 1} cho ${profileLabel} nhóm ${optionCount} đáp án`}
-                                          type="number"
-                                          min={0}
-                                          max={100}
-                                          step={5}
+                                          type="text"
+                                          inputMode="numeric"
+                                          pattern="[0-9]*"
+                                          maxLength={3}
+                                          list={WEIGHT_PERCENTAGE_LIST_ID}
                                           value={weight}
                                           onChange={(event) => {
                                             if (presetKey) {
                                               updateFiveOptionPreset(
                                                 presetKey,
                                                 optionIndex,
-                                                event.target.valueAsNumber,
+                                                Number(event.target.value),
                                               );
                                               return;
                                             }
                                             updateBulkWeight(
                                               optionCount,
                                               optionIndex,
-                                              event.target.valueAsNumber,
+                                              Number(event.target.value),
                                             );
                                           }}
                                         />
                                         <strong>%</strong>
                                       </div>
-                                      <select
-                                        aria-label={`Chọn nhanh tỷ lệ đáp án ${optionIndex + 1} cho ${profileLabel} nhóm ${optionCount} đáp án`}
-                                        value={quickWeight}
-                                        onChange={(event) => {
-                                          if (presetKey) {
-                                            updateFiveOptionPreset(
-                                              presetKey,
-                                              optionIndex,
-                                              Number(event.target.value),
-                                            );
-                                            return;
-                                          }
-                                          updateBulkWeight(
-                                            optionCount,
-                                            optionIndex,
-                                            Number(event.target.value),
-                                          );
-                                        }}
-                                      >
-                                        <option value="" disabled>
-                                          Chọn nhanh
-                                        </option>
-                                        {WEIGHT_PERCENTAGES.map((percentage) => (
-                                          <option value={percentage} key={percentage}>
-                                            {percentage}%
-                                          </option>
-                                        ))}
-                                      </select>
                                     </div>
                                   </label>
                                 );
@@ -1772,9 +1749,6 @@ export default function HomePage() {
 
                                       {displayGroup.options.map((option) => {
                                         const weight = optionWeights[question.entry]?.[option] ?? 0;
-                                        const quickWeight = WEIGHT_PERCENTAGES.includes(weight)
-                                          ? weight
-                                          : "";
 
                                         return (
                                           <td key={option}>
@@ -1782,41 +1756,22 @@ export default function HomePage() {
                                               <label className="matrix-manual-weight">
                                                 <input
                                                   aria-label={`Nhập tỷ lệ cho ${question.questionText}: ${option}`}
-                                                  type="number"
-                                                  min={0}
-                                                  max={100}
-                                                  step={5}
+                                                  type="text"
+                                                  inputMode="numeric"
+                                                  pattern="[0-9]*"
+                                                  maxLength={3}
+                                                  list={WEIGHT_PERCENTAGE_LIST_ID}
                                                   value={weight}
                                                   onChange={(event) =>
                                                     updateOptionWeight(
                                                       question,
                                                       option,
-                                                      event.target.valueAsNumber,
+                                                      Number(event.target.value),
                                                     )
                                                   }
                                                 />
                                                 <span>%</span>
                                               </label>
-                                              <select
-                                                aria-label={`Chọn nhanh tỷ lệ cho ${question.questionText}: ${option}`}
-                                                value={quickWeight}
-                                                onChange={(event) =>
-                                                  updateOptionWeight(
-                                                    question,
-                                                    option,
-                                                    Number(event.target.value),
-                                                  )
-                                                }
-                                              >
-                                                <option value="" disabled>
-                                                  Chọn nhanh
-                                                </option>
-                                                {WEIGHT_PERCENTAGES.map((percentage) => (
-                                                  <option value={percentage} key={percentage}>
-                                                    {percentage}%
-                                                  </option>
-                                                ))}
-                                              </select>
                                             </div>
                                           </td>
                                         );
@@ -1957,39 +1912,27 @@ export default function HomePage() {
                           <div className="option-weight-list">
                             {question.options.map((option) => {
                               const weight = optionWeights[question.entry]?.[option] ?? 0;
-                              const quickWeight = WEIGHT_PERCENTAGES.includes(weight) ? weight : "";
 
                               return (
                                 <div className="option-weight-row" key={option}>
                                   <span>{option}</span>
                                   <input
                                     aria-label={`Nhập tỷ lệ cho ${option}`}
-                                    type="number"
-                                    min={0}
-                                    max={100}
-                                    step={5}
+                                    type="text"
+                                    inputMode="numeric"
+                                    pattern="[0-9]*"
+                                    maxLength={3}
+                                    list={WEIGHT_PERCENTAGE_LIST_ID}
                                     value={weight}
                                     onChange={(event) =>
-                                      updateOptionWeight(question, option, event.target.valueAsNumber)
+                                      updateOptionWeight(
+                                        question,
+                                        option,
+                                        Number(event.target.value),
+                                      )
                                     }
                                   />
                                   <strong>%</strong>
-                                  <select
-                                    aria-label={`Chọn nhanh tỷ lệ cho ${option}`}
-                                    value={quickWeight}
-                                    onChange={(event) =>
-                                      updateOptionWeight(question, option, Number(event.target.value))
-                                    }
-                                  >
-                                    <option value="" disabled>
-                                      Chọn nhanh
-                                    </option>
-                                    {WEIGHT_PERCENTAGES.map((percentage) => (
-                                      <option value={percentage} key={percentage}>
-                                        {percentage}%
-                                      </option>
-                                    ))}
-                                  </select>
                                 </div>
                               );
                             })}
