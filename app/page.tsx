@@ -1514,7 +1514,7 @@ export default function HomePage() {
                               style={{
                                 minWidth: `${Math.max(
                                   760,
-                                  260 + displayGroup.options.length * 145 + 100,
+                                  240 + displayGroup.options.length * 130 + 100,
                                 )}px`,
                               }}
                             >
@@ -1544,7 +1544,6 @@ export default function HomePage() {
                                           </strong>
                                         </div>
                                         <div className="matrix-question-details">
-                                          <code>{question.entry}</code>
                                           <span
                                             className={`weight-mode-badge ${
                                               isCustom ? "is-custom" : "is-global"
