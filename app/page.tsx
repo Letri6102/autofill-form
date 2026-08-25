@@ -48,6 +48,9 @@ type QuestionDisplayGroup =
       question: ParsedQuestion;
     };
 
+type MatrixQuestionDisplayGroup = Extract<QuestionDisplayGroup, { kind: "matrix" }>;
+type FiveOptionPresetKey = "opt1" | "opt2";
+
 type ApiResponse =
   | {
       ok: true;
@@ -120,6 +123,10 @@ const MAX_DELAY_SECONDS = 3600;
 const DEFAULT_QUESTIONS_PER_PAGE = 5;
 const QUESTIONS_PER_PAGE_OPTIONS = [5, 10, 15, 20];
 const WEIGHT_STEP = 10;
+const FIVE_OPTION_PRESETS: Array<{ key: FiveOptionPresetKey; label: string }> = [
+  { key: "opt1", label: "Opt 1" },
+  { key: "opt2", label: "Opt 2" },
+];
 const ACTIVE_RUN_STORAGE_KEY = "google-form-active-workflow-run";
 const JOB_POLL_INTERVAL_MS = 3000;
 const MAX_START_REQUEST_BYTES = 4_000_000;
@@ -163,6 +170,13 @@ function buildDefaultWeights(options: string[]): Record<string, number> {
   return Object.fromEntries(
     options.map((option, index) => [option, values[index]]),
   );
+}
+
+function buildDefaultFiveOptionPresets(): Record<FiveOptionPresetKey, number[]> {
+  return {
+    opt1: buildDefaultWeightValues(5),
+    opt2: buildDefaultWeightValues(5),
+  };
 }
 
 function clampNumber(value: number, min: number, max: number): number {
@@ -215,6 +229,19 @@ function buildAutoColumnMapping(questions: ParsedQuestion[], headers: string[]):
 
 function haveSameOptions(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((option, index) => option === right[index]);
+}
+
+function getMatrixGroupKey(question: ParsedQuestion): string {
+  return [
+    question.sectionIndex,
+    question.typeId,
+    question.groupTitle,
+    question.options.join("\u001f"),
+  ].join("\u001e");
+}
+
+function belongsToSameMatrixGroup(left: ParsedQuestion, right: ParsedQuestion): boolean {
+  return getMatrixGroupKey(left) === getMatrixGroupKey(right);
 }
 
 function buildQuestionDisplayGroups(questions: ParsedQuestion[]): QuestionDisplayGroup[] {
@@ -270,8 +297,18 @@ export default function HomePage() {
   const [keyword, setKeyword] = useState("");
   const [optionWeights, setOptionWeights] = useState<Record<string, Record<string, number>>>({});
   const [bulkWeightProfiles, setBulkWeightProfiles] = useState<Record<number, number[]>>({});
+  const [fiveOptionPresets, setFiveOptionPresets] = useState<
+    Record<FiveOptionPresetKey, number[]>
+  >(buildDefaultFiveOptionPresets);
   const [bulkWeightMessage, setBulkWeightMessage] = useState("");
   const [customWeightEntries, setCustomWeightEntries] = useState<Record<string, true>>({});
+  const [appliedPresetEntries, setAppliedPresetEntries] = useState<
+    Record<string, FiveOptionPresetKey>
+  >({});
+  const [groupPresetSelections, setGroupPresetSelections] = useState<
+    Record<string, FiveOptionPresetKey>
+  >({});
+  const [groupPresetMessages, setGroupPresetMessages] = useState<Record<string, string>>({});
   const [pageHistoryValue, setPageHistoryValue] = useState("0");
   const [formCount, setFormCount] = useState(10);
   const [delayMinSeconds, setDelayMinSeconds] = useState(90);
@@ -402,6 +439,31 @@ export default function HomePage() {
     })).sort((left, right) => left.optionCount - right.optionCount);
   }, [optionQuestions]);
 
+  const weightProfileRows = useMemo(
+    () =>
+      weightProfileGroups.flatMap(({ optionCount, questionCount }) => {
+        const defaultRow = {
+          optionCount,
+          questionCount,
+          presetKey: null as FiveOptionPresetKey | null,
+          profileLabel: "Mặc định",
+        };
+
+        if (optionCount !== 5) return [defaultRow];
+
+        return [
+          defaultRow,
+          ...FIVE_OPTION_PRESETS.map(({ key, label }) => ({
+            optionCount,
+            questionCount,
+            presetKey: key,
+            profileLabel: label,
+          })),
+        ];
+      }),
+    [weightProfileGroups],
+  );
+
   const bulkWeightsValid = weightProfileGroups.every(({ optionCount }) => {
     const profile = bulkWeightProfiles[optionCount] ?? buildDefaultWeightValues(optionCount);
     return profile.reduce((sum, weight) => sum + weight, 0) === 100;
@@ -445,8 +507,12 @@ export default function HomePage() {
     if (!data) {
       setOptionWeights({});
       setBulkWeightProfiles({});
+      setFiveOptionPresets(buildDefaultFiveOptionPresets());
       setBulkWeightMessage("");
       setCustomWeightEntries({});
+      setAppliedPresetEntries({});
+      setGroupPresetSelections({});
+      setGroupPresetMessages({});
       setPageHistoryValue("0");
       setColumnMapping({});
       setTextAnswerBanks({});
@@ -475,8 +541,12 @@ export default function HomePage() {
 
     setOptionWeights(nextWeights);
     setBulkWeightProfiles(nextBulkWeightProfiles);
+    setFiveOptionPresets(buildDefaultFiveOptionPresets());
     setBulkWeightMessage("");
     setCustomWeightEntries({});
+    setAppliedPresetEntries({});
+    setGroupPresetSelections({});
+    setGroupPresetMessages({});
     setPageHistoryValue(data.pageHistory || "0");
     setSubmitLogs([]);
     setSubmitError("");
@@ -741,6 +811,11 @@ export default function HomePage() {
       ...current,
       [question.entry]: true,
     }));
+    setAppliedPresetEntries((current) => {
+      const nextEntries = { ...current };
+      delete nextEntries[question.entry];
+      return nextEntries;
+    });
     setBulkWeightMessage("");
   }
 
@@ -763,6 +838,30 @@ export default function HomePage() {
     setBulkWeightProfiles((current) => ({
       ...current,
       [optionCount]: buildDefaultWeightValues(optionCount),
+    }));
+    setBulkWeightMessage("");
+  }
+
+  function updateFiveOptionPreset(
+    presetKey: FiveOptionPresetKey,
+    optionIndex: number,
+    nextWeight: number,
+  ) {
+    const safeWeight = clampNumber(Math.round(nextWeight), 0, 100);
+
+    setFiveOptionPresets((current) => ({
+      ...current,
+      [presetKey]: current[presetKey].map((weight, index) =>
+        index === optionIndex ? safeWeight : weight,
+      ),
+    }));
+    setBulkWeightMessage("");
+  }
+
+  function resetFiveOptionPreset(presetKey: FiveOptionPresetKey) {
+    setFiveOptionPresets((current) => ({
+      ...current,
+      [presetKey]: buildDefaultWeightValues(5),
     }));
     setBulkWeightMessage("");
   }
@@ -794,6 +893,7 @@ export default function HomePage() {
 
     if (overwriteCustom) {
       setCustomWeightEntries({});
+      setAppliedPresetEntries({});
       setBulkWeightMessage(`Đã ghi đè tỷ lệ chung cho ${optionQuestions.length} câu hỏi.`);
       return;
     }
@@ -815,7 +915,48 @@ export default function HomePage() {
       delete nextEntries[question.entry];
       return nextEntries;
     });
+    setAppliedPresetEntries((current) => {
+      const nextEntries = { ...current };
+      delete nextEntries[question.entry];
+      return nextEntries;
+    });
     setBulkWeightMessage("");
+  }
+
+  function applyPresetToMatrixGroup(
+    displayGroup: MatrixQuestionDisplayGroup,
+    presetKey: FiveOptionPresetKey,
+  ) {
+    const sampleQuestion = displayGroup.questions[0];
+    const profile = fiveOptionPresets[presetKey];
+    if (!sampleQuestion || profile.reduce((sum, weight) => sum + weight, 0) !== 100) return;
+
+    const groupKey = getMatrixGroupKey(sampleQuestion);
+    const targetQuestions = allQuestions.filter((question) =>
+      belongsToSameMatrixGroup(question, sampleQuestion),
+    );
+    const nextWeights = Object.fromEntries(
+      targetQuestions.map((question) => [
+        question.entry,
+        Object.fromEntries(
+          question.options.map((option, index) => [option, profile[index] ?? 0]),
+        ),
+      ]),
+    );
+
+    setOptionWeights((current) => ({ ...current, ...nextWeights }));
+    setCustomWeightEntries((current) => ({
+      ...current,
+      ...Object.fromEntries(targetQuestions.map((question) => [question.entry, true as const])),
+    }));
+    setAppliedPresetEntries((current) => ({
+      ...current,
+      ...Object.fromEntries(targetQuestions.map((question) => [question.entry, presetKey])),
+    }));
+    setGroupPresetMessages((current) => ({
+      ...current,
+      [groupKey]: `Đã áp dụng ${FIVE_OPTION_PRESETS.find((item) => item.key === presetKey)?.label} cho ${targetQuestions.length} câu hỏi.`,
+    }));
   }
 
   function changeQuestionPage(nextPage: number) {
@@ -1345,16 +1486,23 @@ export default function HomePage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {weightProfileGroups.map(({ optionCount, questionCount }) => {
-                      const profile =
-                        bulkWeightProfiles[optionCount] ?? buildDefaultWeightValues(optionCount);
-                      const total = profile.reduce((sum, weight) => sum + weight, 0);
+                    {weightProfileRows.map(
+                      ({ optionCount, questionCount, presetKey, profileLabel }) => {
+                        const profile = presetKey
+                          ? fiveOptionPresets[presetKey]
+                          : bulkWeightProfiles[optionCount] ?? buildDefaultWeightValues(optionCount);
+                        const total = profile.reduce((sum, weight) => sum + weight, 0);
 
                       return (
-                        <tr key={optionCount}>
+                        <tr
+                          className={presetKey ? "is-preset-row" : undefined}
+                          key={`${optionCount}-${presetKey ?? "default"}`}
+                        >
                           <th scope="row">
                             <strong>{optionCount} đáp án</strong>
-                            <span>{questionCount} câu hỏi</span>
+                            <span>
+                              {presetKey ? profileLabel : `${questionCount} câu hỏi · Mặc định`}
+                            </span>
                           </th>
                           <td>
                             <div className="bulk-weight-values">
@@ -1367,32 +1515,48 @@ export default function HomePage() {
                                     <div className="bulk-weight-control">
                                       <div>
                                         <input
-                                          aria-label={`Nhập tỷ lệ đáp án ${optionIndex + 1} cho nhóm ${optionCount} đáp án`}
+                                          aria-label={`Nhập tỷ lệ đáp án ${optionIndex + 1} cho ${profileLabel} nhóm ${optionCount} đáp án`}
                                           type="number"
                                           min={0}
                                           max={100}
                                           step={5}
                                           value={weight}
-                                          onChange={(event) =>
+                                          onChange={(event) => {
+                                            if (presetKey) {
+                                              updateFiveOptionPreset(
+                                                presetKey,
+                                                optionIndex,
+                                                event.target.valueAsNumber,
+                                              );
+                                              return;
+                                            }
                                             updateBulkWeight(
                                               optionCount,
                                               optionIndex,
                                               event.target.valueAsNumber,
-                                            )
-                                          }
+                                            );
+                                          }}
                                         />
                                         <strong>%</strong>
                                       </div>
                                       <select
-                                        aria-label={`Chọn nhanh tỷ lệ đáp án ${optionIndex + 1} cho nhóm ${optionCount} đáp án`}
+                                        aria-label={`Chọn nhanh tỷ lệ đáp án ${optionIndex + 1} cho ${profileLabel} nhóm ${optionCount} đáp án`}
                                         value={quickWeight}
-                                        onChange={(event) =>
+                                        onChange={(event) => {
+                                          if (presetKey) {
+                                            updateFiveOptionPreset(
+                                              presetKey,
+                                              optionIndex,
+                                              Number(event.target.value),
+                                            );
+                                            return;
+                                          }
                                           updateBulkWeight(
                                             optionCount,
                                             optionIndex,
                                             Number(event.target.value),
-                                          )
-                                        }
+                                          );
+                                        }}
                                       >
                                         <option value="" disabled>
                                           Chọn nhanh
@@ -1422,14 +1586,18 @@ export default function HomePage() {
                             <button
                               className="bulk-reset-button"
                               type="button"
-                              onClick={() => resetBulkWeightProfile(optionCount)}
+                              onClick={() =>
+                                presetKey
+                                  ? resetFiveOptionPreset(presetKey)
+                                  : resetBulkWeightProfile(optionCount)
+                              }
                             >
                               Chia đều
                             </button>
                           </td>
                         </tr>
                       );
-                    })}
+                      })}
                   </tbody>
                 </table>
               </div>
@@ -1481,6 +1649,18 @@ export default function HomePage() {
                     if (displayGroup.kind === "matrix") {
                       const firstQuestionNumber = displayGroup.questions[0]?.questionOrder;
                       const lastQuestionNumber = displayGroup.questions.at(-1)?.questionOrder;
+                      const sampleQuestion = displayGroup.questions[0];
+                      const matrixGroupKey = sampleQuestion ? getMatrixGroupKey(sampleQuestion) : "";
+                      const selectedPreset = groupPresetSelections[matrixGroupKey] ?? "opt1";
+                      const selectedPresetTotal = fiveOptionPresets[selectedPreset].reduce(
+                        (sum, weight) => sum + weight,
+                        0,
+                      );
+                      const matrixGroupQuestionCount = sampleQuestion
+                        ? allQuestions.filter((question) =>
+                            belongsToSameMatrixGroup(question, sampleQuestion),
+                          ).length
+                        : 0;
 
                       return (
                         <div className="question-matrix" key={displayGroup.key}>
@@ -1533,6 +1713,13 @@ export default function HomePage() {
                                 {displayGroup.questions.map((question) => {
                                   const total = getQuestionWeightTotal(question);
                                   const isCustom = Boolean(customWeightEntries[question.entry]);
+                                  const appliedPreset = appliedPresetEntries[question.entry];
+                                  const weightModeLabel = appliedPreset
+                                    ? FIVE_OPTION_PRESETS.find((item) => item.key === appliedPreset)
+                                        ?.label
+                                    : isCustom
+                                      ? "Tùy chỉnh"
+                                      : "Tỷ lệ chung";
 
                                   return (
                                     <tr className={isCustom ? "is-custom" : ""} key={question.entry}>
@@ -1549,7 +1736,7 @@ export default function HomePage() {
                                               isCustom ? "is-custom" : "is-global"
                                             }`}
                                           >
-                                            {isCustom ? "Tùy chỉnh" : "Tỷ lệ chung"}
+                                            {weightModeLabel}
                                           </span>
                                         </div>
 
@@ -1655,6 +1842,53 @@ export default function HomePage() {
                               </tbody>
                             </table>
                           </div>
+
+                          {displayGroup.options.length === 5 && sampleQuestion ? (
+                            <div className="matrix-preset-footer">
+                              <div>
+                                <strong>Áp dụng bộ tỷ lệ 5 đáp án</strong>
+                                <span>Cho toàn bộ {matrixGroupQuestionCount} câu trong nhóm</span>
+                              </div>
+                              <div className="matrix-preset-controls">
+                                <select
+                                  aria-label={`Chọn bộ tỷ lệ cho ${displayGroup.title}`}
+                                  value={selectedPreset}
+                                  onChange={(event) => {
+                                    setGroupPresetSelections((current) => ({
+                                      ...current,
+                                      [matrixGroupKey]: event.target.value as FiveOptionPresetKey,
+                                    }));
+                                    setGroupPresetMessages((current) => ({
+                                      ...current,
+                                      [matrixGroupKey]: "",
+                                    }));
+                                  }}
+                                >
+                                  {FIVE_OPTION_PRESETS.map(({ key, label }) => (
+                                    <option value={key} key={key}>
+                                      {label}
+                                    </option>
+                                  ))}
+                                </select>
+                                <button
+                                  type="button"
+                                  disabled={selectedPresetTotal !== 100}
+                                  onClick={() =>
+                                    applyPresetToMatrixGroup(displayGroup, selectedPreset)
+                                  }
+                                >
+                                  Áp dụng
+                                </button>
+                              </div>
+                              {groupPresetMessages[matrixGroupKey] ? (
+                                <p aria-live="polite">{groupPresetMessages[matrixGroupKey]}</p>
+                              ) : selectedPresetTotal !== 100 ? (
+                                <p className="is-invalid">
+                                  Tổng {selectedPresetTotal}%. Hãy chỉnh về 100% ở phần Tỷ lệ chung.
+                                </p>
+                              ) : null}
+                            </div>
+                          ) : null}
                         </div>
                       );
                     }
@@ -1668,10 +1902,6 @@ export default function HomePage() {
                           <span className="question-number">#{question.questionOrder}</span>
                           <span className="type-badge">{question.type}</span>
                           {question.required ? <span className="required-badge">Bắt buộc</span> : null}
-                        </div>
-                        <div className="entry-line">
-                          <span>Entry:</span>
-                          <code>{question.entry}</code>
                         </div>
                       </div>
 
