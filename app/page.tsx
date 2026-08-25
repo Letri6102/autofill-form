@@ -117,7 +117,8 @@ type DataFileResponse =
 const MAX_FORM_COUNT = 1000;
 const MIN_DELAY_SECONDS = 10;
 const MAX_DELAY_SECONDS = 3600;
-const QUESTIONS_PER_PAGE = 5;
+const DEFAULT_QUESTIONS_PER_PAGE = 5;
+const QUESTIONS_PER_PAGE_OPTIONS = [5, 10, 15, 20];
 const WEIGHT_STEP = 10;
 const ACTIVE_RUN_STORAGE_KEY = "google-form-active-workflow-run";
 const JOB_POLL_INTERVAL_MS = 3000;
@@ -280,6 +281,7 @@ export default function HomePage() {
   const [submitLogs, setSubmitLogs] = useState<SubmissionLog[]>([]);
   const [delayRemaining, setDelayRemaining] = useState<number | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const [questionsPerPage, setQuestionsPerPage] = useState(DEFAULT_QUESTIONS_PER_PAGE);
   const [importedData, setImportedData] = useState<ImportedData | null>(null);
   const [importLoading, setImportLoading] = useState(false);
   const [importError, setImportError] = useState("");
@@ -523,23 +525,27 @@ export default function HomePage() {
     setCurrentPage(1);
   }, [keyword]);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [questionsPerPage]);
+
   const filteredQuestions = useMemo(
     () => filteredSections.flatMap((section) => section.questions),
     [filteredSections],
   );
 
-  const pageCount = Math.max(1, Math.ceil(filteredQuestions.length / QUESTIONS_PER_PAGE));
+  const pageCount = Math.max(1, Math.ceil(filteredQuestions.length / questionsPerPage));
   const safeCurrentPage = Math.min(currentPage, pageCount);
-  const pageStart = filteredQuestions.length === 0 ? 0 : (safeCurrentPage - 1) * QUESTIONS_PER_PAGE + 1;
-  const pageEnd = Math.min(safeCurrentPage * QUESTIONS_PER_PAGE, filteredQuestions.length);
+  const pageStart = filteredQuestions.length === 0 ? 0 : (safeCurrentPage - 1) * questionsPerPage + 1;
+  const pageEnd = Math.min(safeCurrentPage * questionsPerPage, filteredQuestions.length);
 
   const paginatedSections = useMemo(() => {
     if (!data) return [];
 
     const sectionMap = new Map(data.sections.map((section) => [section.sectionIndex, section]));
     const questions = filteredQuestions.slice(
-      (safeCurrentPage - 1) * QUESTIONS_PER_PAGE,
-      safeCurrentPage * QUESTIONS_PER_PAGE,
+      (safeCurrentPage - 1) * questionsPerPage,
+      safeCurrentPage * questionsPerPage,
     );
     const sections: ParsedSection[] = [];
 
@@ -559,7 +565,7 @@ export default function HomePage() {
     }
 
     return sections;
-  }, [data, filteredQuestions, safeCurrentPage]);
+  }, [data, filteredQuestions, questionsPerPage, safeCurrentPage]);
 
   function getQuestionWeightTotal(question: ParsedQuestion): number {
     const weights = optionWeights[question.entry] ?? {};
@@ -1094,6 +1100,8 @@ export default function HomePage() {
             </button>
           </div>
 
+          {safeCurrentPage === 1 ? (
+            <>
           <div className="submit-panel">
             <div className="submit-panel-header">
               <div>
@@ -1433,6 +1441,8 @@ export default function HomePage() {
               ) : null}
             </section>
           ) : null}
+            </>
+          ) : null}
 
           <div className="toolbar">
             <input
@@ -1440,6 +1450,19 @@ export default function HomePage() {
               onChange={(event) => setKeyword(event.target.value)}
               placeholder="Tìm câu hỏi, entry, option..."
             />
+            <label className="page-size-control">
+              <span>Câu mỗi trang</span>
+              <select
+                value={questionsPerPage}
+                onChange={(event) => setQuestionsPerPage(Number(event.target.value))}
+              >
+                {QUESTIONS_PER_PAGE_OPTIONS.map((option) => (
+                  <option value={option} key={option}>
+                    {option} câu
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
 
           <div className="section-list" ref={questionListRef}>
@@ -1766,7 +1789,8 @@ export default function HomePage() {
 
           <div className="pagination-bar">
             <p>
-              Hiển thị {pageStart}-{pageEnd} / {filteredQuestions.length} câu hỏi
+              Hiển thị {pageStart}-{pageEnd} / {filteredQuestions.length} câu hỏi · {paginatedSections.length}{" "}
+              section
             </p>
             <div className="pagination-actions">
               <button
