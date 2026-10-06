@@ -788,38 +788,6 @@ code {
   font-weight: 850;
 }
 
-.page-jump-control {
-  display: grid;
-  grid-template-columns: auto 104px;
-  gap: 6px;
-  align-items: center;
-}
-
-.page-jump-control span {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 850;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.page-jump-control select {
-  min-height: 38px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  outline: none;
-  background: white;
-  color: var(--text);
-  padding: 0 26px 0 8px;
-  font-size: 12px;
-  font-weight: 750;
-}
-
-.page-jump-control select:focus {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
-}
-
 .section-list {
   display: grid;
   gap: 14px;
@@ -1501,13 +1469,4 @@ code {
     justify-content: center;
   }
 
-  .page-jump-control {
-    order: 4;
-    width: 100%;
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .page-jump-control select {
-    width: 100%;
-  }
 }

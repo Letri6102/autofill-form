@@ -2038,20 +2038,6 @@ export default function HomePage() {
               >
                 Sau
               </button>
-              <label className="page-jump-control">
-                <span>Đến trang</span>
-                <select
-                  aria-label="Đi đến trang"
-                  value={safeCurrentPage}
-                  onChange={(event) => changeQuestionPage(Number(event.target.value))}
-                >
-                  {Array.from({ length: pageCount }, (_, index) => index + 1).map((page) => (
-                    <option value={page} key={page}>
-                      Trang {page}
-                    </option>
-                  ))}
-                </select>
-              </label>
             </div>
           </div>
         </section>
