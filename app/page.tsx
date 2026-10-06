@@ -120,8 +120,8 @@ type DataFileResponse =
 const MAX_FORM_COUNT = 1000;
 const MIN_DELAY_SECONDS = 10;
 const MAX_DELAY_SECONDS = 3600;
-const DEFAULT_QUESTIONS_PER_PAGE = 5;
-const QUESTIONS_PER_PAGE_OPTIONS = [5, 10, 15, 20];
+const DEFAULT_QUESTIONS_PER_PAGE = 10;
+const QUESTIONS_PER_PAGE_OPTIONS = [20, 50, 100];
 const WEIGHT_STEP = 10;
 const FIVE_OPTION_PRESETS: Array<{ key: FiveOptionPresetKey; label: string }> = [
   { key: "opt1", label: "Opt 1" },
