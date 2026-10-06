@@ -491,7 +491,11 @@ code {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   align-items: end;
-  margin-bottom: 20px;
+  margin: -4px 0 22px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #f8fafc;
+  padding: 12px;
 }
 
 .page-size-control {
@@ -732,20 +736,88 @@ code {
 
 .pagination-actions {
   display: flex;
-  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
   align-items: center;
 }
 
-.pagination-actions button {
+.pagination-nav-button {
+  min-width: 76px;
   min-height: 38px;
   padding: 0 14px;
 }
 
-.pagination-actions span {
-  color: var(--muted);
+.page-number-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+
+.page-number-button {
+  min-width: 36px;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: white;
+  color: #475569;
+  padding: 0 9px;
   font-size: 13px;
+}
+
+.page-number-button:hover {
+  border-color: #93c5fd;
+  background: var(--soft-blue);
+  color: var(--primary-dark);
+}
+
+.page-number-button.is-active {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: white;
+}
+
+.page-number-ellipsis {
+  display: inline-flex;
+  min-width: 24px;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
   font-weight: 850;
+}
+
+.page-jump-control {
+  display: grid;
+  grid-template-columns: auto 104px;
+  gap: 6px;
+  align-items: center;
+}
+
+.page-jump-control span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
   white-space: nowrap;
+}
+
+.page-jump-control select {
+  min-height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+  background: white;
+  color: var(--text);
+  padding: 0 26px 0 8px;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.page-jump-control select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 
 .section-list {
@@ -1338,8 +1410,7 @@ code {
   .bulk-weight-header,
   .submit-actions,
   .data-import-header,
-  .pagination-bar,
-  .pagination-actions {
+  .pagination-bar {
     flex-direction: column;
   }
 
@@ -1347,7 +1418,6 @@ code {
   .secondary-button,
   .bulk-weight-header button,
   .submit-actions button,
-  .pagination-actions button,
   .file-picker {
     width: 100%;
   }
@@ -1413,8 +1483,31 @@ code {
   }
 
   .pagination-actions {
-    display: grid;
+    display: flex;
     width: 100%;
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .pagination-nav-button {
+    width: auto;
+    flex: 1 1 90px;
+  }
+
+  .page-number-list {
+    order: 3;
+    flex-basis: 100%;
+    justify-content: center;
+  }
+
+  .page-jump-control {
+    order: 4;
+    width: 100%;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .page-jump-control select {
+    width: 100%;
   }
 }

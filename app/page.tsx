@@ -50,6 +50,7 @@ type QuestionDisplayGroup =
 
 type MatrixQuestionDisplayGroup = Extract<QuestionDisplayGroup, { kind: "matrix" }>;
 type FiveOptionPresetKey = "opt1" | "opt2";
+type PaginationItem = number | "start-ellipsis" | "end-ellipsis";
 
 type ApiResponse =
   | {
@@ -121,7 +122,7 @@ const MAX_FORM_COUNT = 1000;
 const MIN_DELAY_SECONDS = 10;
 const MAX_DELAY_SECONDS = 3600;
 const DEFAULT_QUESTIONS_PER_PAGE = 10;
-const QUESTIONS_PER_PAGE_OPTIONS = [20, 50, 100];
+const QUESTIONS_PER_PAGE_OPTIONS = [10, 20, 50, 100];
 const WEIGHT_STEP = 10;
 const FIVE_OPTION_PRESETS: Array<{ key: FiveOptionPresetKey; label: string }> = [
   { key: "opt1", label: "Opt 1" },
@@ -183,6 +184,37 @@ function buildDefaultFiveOptionPresets(): Record<FiveOptionPresetKey, number[]> 
 function clampNumber(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
+}
+
+function buildPaginationItems(currentPage: number, pageCount: number): PaginationItem[] {
+  if (pageCount <= 9) {
+    return Array.from({ length: pageCount }, (_, index) => index + 1);
+  }
+
+  const visiblePages = new Set<number>([1, pageCount]);
+  for (let page = currentPage - 1; page <= currentPage + 1; page += 1) {
+    if (page > 1 && page < pageCount) visiblePages.add(page);
+  }
+
+  if (currentPage <= 4) {
+    for (let page = 2; page <= 5; page += 1) visiblePages.add(page);
+  }
+  if (currentPage >= pageCount - 3) {
+    for (let page = pageCount - 4; page < pageCount; page += 1) visiblePages.add(page);
+  }
+
+  const sortedPages = Array.from(visiblePages).sort((left, right) => left - right);
+  const items: PaginationItem[] = [];
+
+  sortedPages.forEach((page, index) => {
+    const previousPage = sortedPages[index - 1];
+    if (previousPage && page - previousPage > 1) {
+      items.push(previousPage === 1 ? "start-ellipsis" : "end-ellipsis");
+    }
+    items.push(page);
+  });
+
+  return items;
 }
 
 function randomInt(min: number, max: number): number {
@@ -609,6 +641,10 @@ export default function HomePage() {
   const safeCurrentPage = Math.min(currentPage, pageCount);
   const pageStart = filteredQuestions.length === 0 ? 0 : (safeCurrentPage - 1) * questionsPerPage + 1;
   const pageEnd = Math.min(safeCurrentPage * questionsPerPage, filteredQuestions.length);
+  const paginationItems = useMemo(
+    () => buildPaginationItems(safeCurrentPage, pageCount),
+    [pageCount, safeCurrentPage],
+  );
 
   const paginatedSections = useMemo(() => {
     if (!data) return [];
@@ -1247,6 +1283,27 @@ export default function HomePage() {
             </button>
           </div>
 
+          <div className="toolbar">
+            <input
+              value={keyword}
+              onChange={(event) => setKeyword(event.target.value)}
+              placeholder="Tìm câu hỏi, entry, option..."
+            />
+            <label className="page-size-control">
+              <span>Câu mỗi trang</span>
+              <select
+                value={questionsPerPage}
+                onChange={(event) => setQuestionsPerPage(Number(event.target.value))}
+              >
+                {QUESTIONS_PER_PAGE_OPTIONS.map((option) => (
+                  <option value={option} key={option}>
+                    {option} câu
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
           {safeCurrentPage === 1 ? (
             <>
           <div className="submit-panel">
@@ -1588,27 +1645,6 @@ export default function HomePage() {
           ) : null}
             </>
           ) : null}
-
-          <div className="toolbar">
-            <input
-              value={keyword}
-              onChange={(event) => setKeyword(event.target.value)}
-              placeholder="Tìm câu hỏi, entry, option..."
-            />
-            <label className="page-size-control">
-              <span>Câu mỗi trang</span>
-              <select
-                value={questionsPerPage}
-                onChange={(event) => setQuestionsPerPage(Number(event.target.value))}
-              >
-                {QUESTIONS_PER_PAGE_OPTIONS.map((option) => (
-                  <option value={option} key={option}>
-                    {option} câu
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
 
           <div className="section-list" ref={questionListRef}>
             {paginatedSections.map((section) => (
@@ -1966,24 +2002,56 @@ export default function HomePage() {
             </p>
             <div className="pagination-actions">
               <button
-                className="secondary-button"
+                className="secondary-button pagination-nav-button"
                 type="button"
                 disabled={safeCurrentPage <= 1}
                 onClick={() => changeQuestionPage(safeCurrentPage - 1)}
               >
                 Trước
               </button>
-              <span>
-                Trang {safeCurrentPage} / {pageCount}
-              </span>
+              <nav className="page-number-list" aria-label="Chọn trang câu hỏi">
+                {paginationItems.map((item) =>
+                  typeof item === "number" ? (
+                    <button
+                      className={`page-number-button ${
+                        item === safeCurrentPage ? "is-active" : ""
+                      }`}
+                      type="button"
+                      aria-current={item === safeCurrentPage ? "page" : undefined}
+                      onClick={() => changeQuestionPage(item)}
+                      key={item}
+                    >
+                      {item}
+                    </button>
+                  ) : (
+                    <span className="page-number-ellipsis" aria-hidden="true" key={item}>
+                      …
+                    </span>
+                  ),
+                )}
+              </nav>
               <button
-                className="secondary-button"
+                className="secondary-button pagination-nav-button"
                 type="button"
                 disabled={safeCurrentPage >= pageCount}
                 onClick={() => changeQuestionPage(safeCurrentPage + 1)}
               >
                 Sau
               </button>
+              <label className="page-jump-control">
+                <span>Đến trang</span>
+                <select
+                  aria-label="Đi đến trang"
+                  value={safeCurrentPage}
+                  onChange={(event) => changeQuestionPage(Number(event.target.value))}
+                >
+                  {Array.from({ length: pageCount }, (_, index) => index + 1).map((page) => (
+                    <option value={page} key={page}>
+                      Trang {page}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
           </div>
         </section>
